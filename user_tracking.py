@@ -29,11 +29,12 @@ class BotHandler:
                 PRODUCT_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.get_product_url)],
                 TARGET_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.get_target_price)],
             },
-            fallbacks=[],
+            fallbacks=[CommandHandler('cancel', self.cancel)],
         ))
         self.application.add_handler(CommandHandler("list", self.show_list))
         self.application.add_handler(CommandHandler("remove", self.show_list))
         self.application.add_handler(CallbackQueryHandler(self.button_click))
+        self.application.add_handler(CommandHandler("cancel", self.cancel))  # global cancel
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
@@ -47,7 +48,8 @@ class BotHandler:
             "Use the buttons below or send commands directly:\n"
             "• `/track` - Start tracking\n"
             "• `/list` - View tracked products\n"
-            "• `/remove` - Remove a product",
+            "• `/remove` - Remove a product\n"
+            "• `/cancel` - Cancel current operation",
             parse_mode="Markdown",
             reply_markup=reply_markup,
         )
@@ -58,7 +60,7 @@ class BotHandler:
 
     async def get_product_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['product_url'] = update.message.text
-        await update.message.reply_text("ℹ️ Now, please provide your target price (in ₹):")
+        await update.message.reply_text("ℹ️ Now, please provide your target price (in ₹):\n\nYou can /cancel anytime.")
         return TARGET_PRICE
 
     async def get_target_price(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -76,11 +78,14 @@ class BotHandler:
             await update.message.reply_text("🚫 Invalid price. Please enter a valid number.")
             return TARGET_PRICE
 
+    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        await update.message.reply_text("❌ Tracking canceled.")
+        return ConversationHandler.END
+
     def sanitize_text(self, text: str) -> str:
         return re.sub(r'([*_`\[\]()])', r'\\\1', text)
 
     async def show_list(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        # Works for both /list and /remove commands
         user_id = update.effective_user.id
         df = get_user_products(user_id)
 
@@ -91,7 +96,7 @@ class BotHandler:
         message = "📋 *Your tracked products:*\n\n"
         keyboard = []
 
-        for index, row in df.iterrows():
+        for _, row in df.iterrows():
             product_url = self.sanitize_text(row['product_url'])
             target_price = self.sanitize_text(str(row['target_price']))
 
@@ -99,7 +104,7 @@ class BotHandler:
             keyboard.append([
                 InlineKeyboardButton(
                     f"❌ Remove",
-                    callback_data=f"remove|{index}"  # Use index as safe ID
+                    callback_data=f"remove|{row['product_url']}"
                 )
             ])
 
@@ -114,7 +119,6 @@ class BotHandler:
         if data == "track":
             await query.message.reply_text("ℹ️ To track a product, use `/track`")
         elif data == "list" or data == "remove":
-            # Call show_list but adapt for button (no update.message!)
             user_id = query.from_user.id
             df = get_user_products(user_id)
 
@@ -125,14 +129,14 @@ class BotHandler:
             message = "📋 *Your tracked products:*\n\n"
             keyboard = []
 
-            for index, row in df.iterrows():
+            for _, row in df.iterrows():
                 product_url = self.sanitize_text(row['product_url'])
                 target_price = self.sanitize_text(str(row['target_price']))
                 message += f"🔗 {product_url}\n🎯 Target: ₹{target_price}\n\n"
                 keyboard.append([
                     InlineKeyboardButton(
                         f"❌ Remove",
-                        callback_data=f"remove|{index}"
+                        callback_data=f"remove|{row['product_url']}"
                     )
                 ])
 
@@ -140,21 +144,16 @@ class BotHandler:
             await query.message.reply_text(message, parse_mode="Markdown", reply_markup=reply_markup)
 
         elif data.startswith("remove|"):
-            index_str = data.split("|", 1)[1]
+            product_url = data.split("|", 1)[1]
             user_id = query.from_user.id
-            df = get_user_products(user_id)
+            deleted = delete_user_product(user_id, product_url)
+            if deleted:
+                await query.message.reply_text(f"✅ Removed tracking for:\n{product_url}")
+            else:
+                await query.message.reply_text("ℹ️ Could not remove the product. Maybe it's already gone?")
 
-            try:
-                index = int(index_str)
-                row = df.iloc[index]
-                product_url = row['product_url']
-                deleted = delete_user_product(user_id, product_url)
-                if deleted:
-                    await query.message.reply_text(f"✅ Removed tracking for:\n{product_url}")
-                else:
-                    await query.message.reply_text("ℹ️ Could not remove the product. Maybe it's already gone?")
-            except (ValueError, IndexError):
-                await query.message.reply_text("🚫 Invalid item or already removed.")
+            # Refresh list automatically
+            await self.show_list(update, context)
 
     def run(self):
         self.application.run_polling()
