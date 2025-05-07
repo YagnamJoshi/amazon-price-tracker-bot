@@ -29,12 +29,11 @@ class BotHandler:
                 PRODUCT_URL: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.get_product_url)],
                 TARGET_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, self.get_target_price)],
             },
-            fallbacks=[CommandHandler('cancel', self.cancel)],
+            fallbacks=[],
         ))
         self.application.add_handler(CommandHandler("list", self.show_list))
         self.application.add_handler(CommandHandler("remove", self.show_list))
         self.application.add_handler(CallbackQueryHandler(self.button_click))
-        self.application.add_handler(CommandHandler("cancel", self.cancel))  # global cancel
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = [
@@ -48,8 +47,7 @@ class BotHandler:
             "Use the buttons below or send commands directly:\n"
             "• `/track` - Start tracking\n"
             "• `/list` - View tracked products\n"
-            "• `/remove` - Remove a product\n"
-            "• `/cancel` - Cancel current operation",
+            "• `/remove` - Remove a product",
             parse_mode="Markdown",
             reply_markup=reply_markup,
         )
@@ -60,7 +58,7 @@ class BotHandler:
 
     async def get_product_url(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data['product_url'] = update.message.text
-        await update.message.reply_text("ℹ️ Now, please provide your target price (in ₹):\n\nYou can /cancel anytime.")
+        await update.message.reply_text("ℹ️ Now, please provide your target price (in ₹):")
         return TARGET_PRICE
 
     async def get_target_price(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -77,10 +75,6 @@ class BotHandler:
         except ValueError:
             await update.message.reply_text("🚫 Invalid price. Please enter a valid number.")
             return TARGET_PRICE
-
-    async def cancel(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text("❌ Tracking canceled.")
-        return ConversationHandler.END
 
     def sanitize_text(self, text: str) -> str:
         return re.sub(r'([*_`\[\]()])', r'\\\1', text)
@@ -103,7 +97,7 @@ class BotHandler:
             message += f"🔗 {product_url}\n🎯 Target: ₹{target_price}\n\n"
             keyboard.append([
                 InlineKeyboardButton(
-                    f"❌ Remove",
+                    "❌ Remove",
                     callback_data=f"remove|{row['product_url']}"
                 )
             ])
@@ -117,7 +111,11 @@ class BotHandler:
         data = query.data
 
         if data == "track":
-            await query.message.reply_text("ℹ️ To track a product, use `/track`")
+            # Directly trigger tracking flow
+            await query.message.reply_text("ℹ️ Please provide the product URL to track:")
+            context.user_data.clear()  # Clear any old data
+            return PRODUCT_URL
+
         elif data == "list" or data == "remove":
             user_id = query.from_user.id
             df = get_user_products(user_id)
@@ -135,7 +133,7 @@ class BotHandler:
                 message += f"🔗 {product_url}\n🎯 Target: ₹{target_price}\n\n"
                 keyboard.append([
                     InlineKeyboardButton(
-                        f"❌ Remove",
+                        "❌ Remove",
                         callback_data=f"remove|{row['product_url']}"
                     )
                 ])
@@ -146,14 +144,12 @@ class BotHandler:
         elif data.startswith("remove|"):
             product_url = data.split("|", 1)[1]
             user_id = query.from_user.id
+
             deleted = delete_user_product(user_id, product_url)
             if deleted:
                 await query.message.reply_text(f"✅ Removed tracking for:\n{product_url}")
             else:
                 await query.message.reply_text("ℹ️ Could not remove the product. Maybe it's already gone?")
-
-            # Refresh list automatically
-            await self.show_list(update, context)
 
     def run(self):
         self.application.run_polling()
